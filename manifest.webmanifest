@@ -1,0 +1,16 @@
+{
+  "name": "Daily Tree",
+  "short_name": "Daily Tree",
+  "description": "Categories, projects and tasks with a daily roll-up and calendar history.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ECF0F5",
+  "theme_color": "#2F64D8",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

@@ -384,6 +384,7 @@ function vHome(){
   const chips=sched.map(n=>{const d=doneOn(n.id,t);return `<button class="chip ${d?'done':''}" data-act="today" data-id="${n.id}" style="--c:${colorOf(n)}" aria-pressed="${d}"><span class="sw"></span><span class="tm">${esc(n.sched.start||'--:--')}</span><span class="nm">${esc(n.name)}</span></button>`})
     .concat(due.map(n=>`<button class="chip due" data-act="open" data-id="${n.id}" style="--c:${colorOf(n)}"><span class="sw"></span><span class="tm">${esc(dueLabel(n.deadline))}</span><span class="nm">${esc(n.name)}</span></button>`));
   return `<div class="date"><div class="d"><div class="wk">${DN[wd(t)]}</div><div class="big">${fmt(t)}</div></div>
+    <button class="ib" data-act="cal" data-id="" aria-label="Calendar">${I.cal}</button>
     <button class="ib" data-act="settings" aria-label="Settings">${I.gear}</button>
     <button class="add-round" data-act="add" data-id="" aria-label="Add a new task quickly">${I.plus}</button></div>
     ${chips.length?`<div class="label">Today</div><div class="strip">${chips.join('')}</div>`:''}
@@ -572,7 +573,7 @@ document.addEventListener('click',e=>{
     case 'cancel':dismissSheet();break;
     case 'settings':go({v:'settings'});break;
     case 'fin':go({v:'fin',id:id||null});break;
-    case 'cal':go({v:'cal',id,month:today().slice(0,7),sel:today()});break;
+    case 'cal':go({v:'cal',id:id||null,month:today().slice(0,7),sel:today()});break;
     case 'calsel':cur().sel=el.dataset.d;render();break;
     case 'calm':{const v=cur();const [y,m]=v.month.split('-').map(Number);const d=new Date(y,m-1+(+el.dataset.n),1);v.month=key(d).slice(0,7);render();break}
     case 'restore':N(id).archived=null;save();render();toast('Restored');break;

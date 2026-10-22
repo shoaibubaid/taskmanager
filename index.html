@@ -298,6 +298,9 @@ const daysLabel=d=>{const s=[...d].sort();if(s.length===7)return'Daily';if(s.joi
 function dueLabel(k){const d=diff(today(),k);if(d<0)return`${-d} day${d===-1?'':'s'} overdue`;if(d===0)return'due today';if(d===1)return'due tomorrow';return`due ${fmt(k)} · ${d} days`}
 function colorOf(n){if(n.color)return n.color;const a=ancestors(n.id).reverse().find(x=>x.color);return a?a.color:COLORS[0]}
 function path(id){return ancestors(id).map(a=>a.name).join(' › ')}
+/* task ordering: earliest deadline first (none last), then earliest start time (none last), then high priority, then manual order */
+const startOf=n=>n.sched&&n.sched.start||'99:99';
+const byUrgency=(a,b)=>(a.deadline||'9999').localeCompare(b.deadline||'9999')||startOf(a).localeCompare(startOf(b))||(b.priority??1)-(a.priority??1)||a.order-b.order;
 
 /* ---------- templates ---------- */
 function snap(id){const n=N(id);return{type:n.type,name:n.name,color:n.color,sched:n.sched?JSON.parse(JSON.stringify(n.sched)):null,desc:n.desc,link:n.link,priority:n.priority,kids:kidsAll(id).filter(k=>!k.archived).map(k=>snap(k.id))}}
@@ -324,25 +327,21 @@ const I={
 const top=(title,right='')=>`<div class="top"><button class="ib" data-act="back" aria-label="Back">${I.back}</button><h1>${esc(title)}</h1>${right}</div>`;
 
 /* ---------- views ---------- */
-/* most urgent pending item under a node: overdue/due today > high priority > routines due now > nearest deadline > tree order > low priority */
+/* most urgent pending item under a node, same ordering as the to-do lists (byUrgency) with tree order as the final tiebreak */
+const whyOf=k=>k.deadline?dueLabel(k.deadline):k.sched&&k.sched.start?`at ${k.sched.start}`:k.priority===2?'high priority':isRec(k)?'today':'';
+const byTop=(a,b)=>(a.k.deadline||'9999').localeCompare(b.k.deadline||'9999')||startOf(a.k).localeCompare(startOf(b.k))||(b.k.priority??1)-(a.k.priority??1)||a.i-b.i;
 function topTask(id){
   const t=today(),wdT=wd(t),c=[];let i=0;
   const walk=pid=>{for(const k of kids(pid)){
     const rec=isRec(k);let cand=false;
     if(rec)cand=k.sched.days.includes(wdT)&&!doneOn(k.id,t);
     else if(k.type==='task')cand=!k.done;
-    if(cand){let tier=4,sub=String(i).padStart(5,'0'),why='';
-      if(k.deadline&&k.deadline<=t){tier=0;sub=k.deadline;why=dueLabel(k.deadline)}
-      else if(k.priority===2){tier=1;why='high priority'}
-      else if(rec){tier=2;sub=k.sched.start||'99';why=k.sched.start?`at ${k.sched.start}`:'today'}
-      else if(k.deadline){tier=3;sub=k.deadline;why=dueLabel(k.deadline)}
-      else if(k.priority===0)tier=5;
-      c.push({k,tier,sub,why})}
+    if(cand)c.push({k,i,why:whyOf(k)});
     i++;
     if(k.type==='group')walk(k.id);
   }};
   walk(id);
-  c.sort((a,b)=>a.tier-b.tier||a.sub.localeCompare(b.sub));
+  c.sort(byTop);
   return c[0]||null;
 }
 /* days since anything inside this node was last done (routine session, task tick or folder finish) */
@@ -360,7 +359,7 @@ function barHTML(n,m){
   if(isRec(n))meta.push(`${n.sched.start||''}${n.sched.end?'–'+n.sched.end:''} ${daysLabel(n.sched.days)}`.trim());
   if(n.deadline)meta.push(dueLabel(n.deadline));
   let tt=n.archived?null:topTask(n.id);
-  if(!n.archived&&isRec(n)&&n.sched.days.includes(wd(today()))&&!doneOn(n.id,today())&&(!tt||tt.tier>2))tt={k:n,tier:2,why:n.sched.start?`at ${n.sched.start}`:'today',self:true};
+  if(!n.archived&&isRec(n)&&n.sched.days.includes(wd(today()))&&!doneOn(n.id,today())){const me={k:n,i:-1,why:whyOf(n),self:true};if(!tt||byTop(me,tt)<=0)tt=me}
   const discEl=`<span class="disc ${b.c}" aria-label="${esc(b.l)}" title="${esc(b.l)}">${b.t}</span>`;
   const style=`style="--c:${c};--t:${textOn(c)}"`;
   if(!tt)return `<div class="bar" role="button" tabindex="0" data-act="open" data-id="${n.id}" ${style}><span class="nm"><b>${esc(n.name)}</b>${meta.length?`<small>${esc(meta.join(' · '))}</small>`:''}</span>${discEl}</div>`;
@@ -368,13 +367,15 @@ function barHTML(n,m){
   const chk=`<button class="bchk" data-act="${isRec(k)?'today':'done'}" data-id="${k.id}" aria-label="Finish ${esc(k.name)}" title="Finish ${esc(k.name)}">${I.chk}</button>`;
   return `<div class="bar" role="button" tabindex="0" data-act="open" data-id="${n.id}" ${style}>${chk}<span class="nm">${tt.self?'':`<span class="tag">${esc(n.name)}${meta.length?`<i>${esc(meta.join(' · '))}</i>`:''}</span>`}<b>${esc(k.name)}</b>${sub.length||(tt.self&&meta.length)?`<small>${esc((tt.self?meta:sub).join(' · '))}</small>`:''}</span>${discEl}</div>`;
 }
-function rowHTML(n){
-  const rec=isRec(n),on=rec?doneOn(n.id,today()):!!n.done;const meta=[];
+function rowHTML(n,locked){
+  const rec=isRec(n),on=locked||(rec?doneOn(n.id,today()):!!n.done);const meta=[];
   if(rec)meta.push(`${n.sched.start||''} ${daysLabel(n.sched.days)}`.trim());
+  else if(n.sched&&n.sched.start)meta.push(`at ${n.sched.start}${n.sched.end?'–'+n.sched.end:''}`);
   if(n.deadline&&!n.done)meta.push(dueLabel(n.deadline));
   const sk=kidsAll(n.id);if(sk.length)meta.push(`${sk.filter(k=>k.done).length}/${sk.length} subtasks`);
   if(n.desc)meta.push(n.desc.slice(0,50));
-  return `<div class="row ${on?'isdone':''}"><button class="chk ${on?'on':''}" data-act="${rec?'today':'done'}" data-id="${n.id}" aria-label="${on?'Mark not done':'Mark done'}: ${esc(n.name)}">${I.chk}</button><button class="main" data-act="open" data-id="${n.id}"><b>${esc(n.name)}</b>${meta.length?`<small>${esc(meta.join(' · '))}</small>`:''}</button>${n.priority===2&&!on?'<span class="prio">HIGH</span>':''}</div>`;
+  const chk=locked?`<span class="chk on" aria-label="Done with its task">${I.chk}</span>`:`<button class="chk ${on?'on':''}" data-act="${rec?'today':'done'}" data-id="${n.id}" aria-label="${on?'Mark not done':'Mark done'}: ${esc(n.name)}">${I.chk}</button>`;
+  return `<div class="row ${on?'isdone':''}">${chk}<button class="main" data-act="open" data-id="${n.id}"><b>${esc(n.name)}</b>${meta.length?`<small>${esc(meta.join(' · '))}</small>`:''}</button>${n.priority===2&&!on?'<span class="prio">HIGH</span>':''}</div>`;
 }
 function vHome(){
   const t=today(),m=new Map();
@@ -393,9 +394,11 @@ function vHome(){
 }
 function vNode(id){
   const n=N(id);if(!n){stack.pop();return render()}
-  const m=new Map(),ks=kids(id),groups=ks.filter(k=>k.type==='group'),tasks=ks.filter(k=>k.type==='task'&&(n.archived||!k.done||isRec(k)));
+  const m=new Map(),ks=kids(id),groups=ks.filter(k=>k.type==='group'),tasks=ks.filter(k=>k.type==='task'&&(n.archived||n.type==='task'||!k.done||isRec(k))).sort(byUrgency);
+  const lockSubs=n.type==='task'&&!!n.done&&!isRec(n);
   const finCount=finItems(id).length;
   const rec=isRec(n),t=today(),info=[];
+  if(!rec&&n.sched&&n.sched.start)info.push(['Time',`<span class="mono">${esc(n.sched.start)}${n.sched.end?'–'+esc(n.sched.end):''}</span>`]);
   if(rec)info.push(['Time',`<span class="mono">${esc(n.sched.start||'')}${n.sched.end?'–'+esc(n.sched.end):''}</span> · ${daysLabel(n.sched.days)}`]);
   if(n.deadline)info.push(['Deadline',`${fmt(n.deadline)} <span class="hint">(${esc(dueLabel(n.deadline))})</span>`]);
   if(n.desc)info.push(['About',esc(n.desc).replace(/\n/g,'<br>')]);
@@ -418,12 +421,12 @@ function vNode(id){
     <div class="actions">${acts.join('')}</div>
     ${groups.length?`<div class="bars">${groups.map(g=>barHTML(g,m)).join('')}</div>`:''}
     <div class="label">${subLabel}<span>${tasks.length||''}</span></div>
-    <div class="list">${tasks.map(rowHTML).join('')||`<div class="empty">Nothing here yet. Tap + to add a ${n.type==='task'?'subtask':'task, or + New folder for a folder'}.</div>`}</div>
-    <button class="finished-btn" data-act="fin" data-id="${id}">Finished tasks${finCount?` · ${finCount}`:''}</button>
+    <div class="list">${tasks.map(k=>rowHTML(k,lockSubs)).join('')||`<div class="empty">Nothing here yet. Tap + to add a ${n.type==='task'?'subtask':'task, or + New folder for a folder'}.</div>`}</div>
+    ${n.type==='task'&&!finCount?'':`<button class="finished-btn" data-act="fin" data-id="${id}">Finished tasks${finCount?` · ${finCount}`:''}</button>`}
     ${n.archived?'':`<button class="add-round fab" data-act="add" data-id="${id}" aria-label="Add a task or folder here">${I.plus}</button>`}`;
 }
 /* finished items that live directly on a page: finished projects/categories + ticked tasks */
-const finItems=id=>kidsAll(id).filter(k=>k.archived||(k.type==='task'&&k.done&&!isRec(k)));
+const finItems=id=>{const subs=!!id&&N(id).type==='task';return kidsAll(id).filter(k=>k.archived||(!subs&&k.type==='task'&&k.done&&!isRec(k)))};
 function vFin(id){
   const items=finItems(id);
   const projs=items.filter(k=>k.archived).sort((a,b)=>b.archived.localeCompare(a.archived));
@@ -505,7 +508,7 @@ function drawSheet(){
     <label class="f"><span>Name</span><input type="text" id="f-name" value="${esc(v('name'))}" placeholder="${type==='group'?'e.g. Gym, Quran reading arabic':'e.g. Read surah 1'}" autocomplete="off"></label>
     <div class="err" id="f-err" hidden></div>
     ${isRoot?'':`<label class="f"><span>Inside</span><select id="f-parent">${parentOptions(edit?n.parent:o.parent,excl)}</select></label>`}
-    <div class="f"><span>Repeats on</span><div class="days">${DL.map((d,i)=>`<label><input type="checkbox" name="f-day" value="${i}" ${days.includes(i)?'checked':''} aria-label="${DN[i]}"><span>${d}</span></label>`).join('')}</div><small class="hint">Leave empty for a one-time item.</small></div>
+    <div class="f"><span>Repeats on</span><div class="days">${DL.map((d,i)=>`<label><input type="checkbox" name="f-day" value="${i}" ${days.includes(i)?'checked':''} aria-label="${DN[i]}"><span>${d}</span></label>`).join('')}</div><small class="hint">Leave empty for a one-time item. Times still apply to one-time items and set their order.</small></div>
     <div class="two"><label class="f"><span>From</span><input type="time" id="f-start" value="${esc(st)}"></label><label class="f"><span>To</span><input type="time" id="f-end" value="${esc(en)}"></label></div>
     <label class="f"><span>Deadline (optional)</span><input type="date" id="f-dl" value="${esc(v('deadline'))}"></label>
     <div class="f t-only"><span>Priority</span><div class="seg" role="group" aria-label="Priority">${['Low','Normal','High'].map((p,i)=>`<button type="button" data-act="fprio" data-p="${i}" class="${(v('priority')??1)===i?'on':''}">${p}</button>`).join('')}</div></div>
@@ -530,7 +533,7 @@ function readForm(){
 }
 function submitSheet(){
   const f=readForm(),o=sheet,err=document.getElementById('f-err');
-  const sched=f.days.length?{days:f.days,start:f.start,end:f.end}:null;
+  const sched=f.days.length||f.start||f.end?{days:f.days,start:f.start,end:f.end}:null;
   if(f.link&&!/^https?:\/\//i.test(f.link))f.link='https://'+f.link;
   if(o.id){
     const n=N(o.id);if(!f.name){err.textContent='Give it a name.';err.hidden=false;return}
